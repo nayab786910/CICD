@@ -1,0 +1,133 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    - java_version: 11
+    - admin_user_pass: admin
+    - jenkins_port: 8080
+    - jenkins_user: cloudjournee
+    - jenkins_pass: Cjptech@12
+    - jenkins_fullname: CloudJournee
+    - jenkins_email: nayab.s@cloudjournee.com
+  tasks:
+    - name: update packages
+      apt:
+        update_cache: yes
+    - name: install dependencies
+      apt:
+         name:
+           - curl
+           - apt-transport-https
+           - gnupg
+           - openjdk-{{ java_version }}-jdk
+         state: present
+    - name: Add an Apt signing key, uses whichever key is at the URL
+      ansible.builtin.apt_key:
+         url: https://pkg.jenkins.io/debian-stable/jenkins.io.key
+         state: present
+
+    - name: Add specified repository into sources list
+      apt_repository:
+        repo: 'deb http://pkg.jenkins.io/debian-stable binary/'
+        state: present
+        update_cache: yes
+    
+    - name: install jenkins
+      apt:
+        name: jenkins
+        state: present
+
+    - name: read admin pwd
+      shell: cat /var/lib/jenkins/secrets/initialAdminPassword
+      register: adminpwd
+
+    - name: unlock and add admin user
+      jenkins_script:
+        script: |
+            import jenkins.model.*
+            import hudson.security.*
+            def instance = Jenkins.getInstance()
+            def hudsonRealm = new HudsonPrivateSecurityRealm(false)
+            hudsonRealm.createAccount('jenkins', '${user_pwd}')
+            instance.setSecurityRealm(hudsonRealm)
+            def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
+            strategy.setAllowAnonymousRead(false)
+            instance.setAuthorizationStrategy(strategy)
+            instance.save()
+        args:
+          user_pwd: "{{ admin_user_pass }}"
+        user: admin
+        password: "{{ adminpwd.stdout }}"
+    
+    - name: complete setup wizard
+      jenkins_script:
+        script: |
+          import static jenkins.model.Jenkins.instance as jenkins
+          import jenkins.install.InstallState
+          if (!jenkins.installState.isSetupComplete()) {
+           InstallState.INITIAL_SETUP_COMPLETED.initializeState()
+           }
+        user: admin
+        password: "{{ adminpwd.stdout }}"
+
+    - name: JENKINS-CTEDENTIALS | Create CRUMB authentication request
+      uri:
+       url: 'http://localhost:{{ jenkins_port }}/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,":",//crumb)'
+       user: "{{ admin_user_pass }}"
+       password: "{{ adminpwd.stdout }}"
+       force_basic_auth: yes
+       return_content: yes
+      register: crumb
+    
+    - name: JENKINS-CTEDENTIALS | Add Jenkins administration account
+      uri:
+       method: POST
+       url: 'http://localhost:{{ jenkins_port }}/securityRealm/createAccountByAdmin'
+       user: "{{ admin_user_pass}}"
+       password: '{{ adminpwd.stdout }}'
+       force_basic_auth: yes
+       follow_redirects: all
+       headers:
+         Jenkins-Crumb: '{{ crumb.content.split(":")[1] }}'
+         Cookie: '{{ crumb.set_cookie }}'
+       body: 'username={{ jenkins_user }}&password1={{ jenkins_pass }}&password2={{ jenkins_pass }}&fullname={{ jenkins_fullname }}&email={{ jenkins_email }}'
+
+    - name: install plugin
+      jenkins_plugin:
+        name: "{{ item }}"
+        state: latest
+        url_username: admin
+        url_password: "{{ adminpwd.stdout }}"
+      with_items:
+         - kubernetes
+         - sonar
+         - Artifactory
+         - git
+    
+    - name: systemd-reload
+      systemd:
+        daemon-reload: yes
+        name: jenkins
+        enabled: true
+    - name: restart Jenkins
+      systemd:
+       name: jenkins
+       state: restarted
+       daemon_reload: yes
+
+    - name: Sending an e-mail using Gmail SMTP servers
+      community.general.mail:
+        host: gator4041.hostgator.com
+        port: 465
+        username: abhilash.rl@cloudjournee.com
+        password: Cjptech@12
+        from: abhilash.rl@cloudjournee.com
+        to: nayab.s@cloudjournee.com
+        subject: jenkins_dashboard credentails
+        body: 'jenkins_dashboard_username="{{ jenkins_user }}"\njenkins_dashboard_password="{{ jenkins_pass }}"'
+      delegate_to: localhost
+
+
+    
+
+
