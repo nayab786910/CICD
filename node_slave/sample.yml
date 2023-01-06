@@ -1,0 +1,65 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    - nodejs_major_version: 18
+  tasks:
+    - name: update packages
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: install git
+      apt:
+        name: git
+        state: present
+
+    - name : Install JDK 11
+      apt:
+        name: openjdk-11-jdk
+        state: present
+
+    - name: Ensure dependencies are present.
+      apt:
+        name:
+          - apt-transport-https
+          - gpg
+        state: present
+
+    - name: Getting script from Nodesource
+      ansible.builtin.get_url:
+        url: "https://deb.nodesource.com/setup_{{ nodejs_major_version }}.x"
+        dest: /tmp/install_nodejs.sh
+        mode: u+x
+      register: downloaded
+    
+    - name: Run the script
+      ansible.builtin.command: bash /tmp/install_nodejs.sh
+      when: downloaded.changed
+
+    - name: Remove the script
+      ansible.builtin.file:
+        path: /tmp/install_nodejs.sh
+        state: absent
+
+    - name: Install nodejs
+      ansible.builtin.apt:
+        name: nodejs
+        state: latest
+
+    - name: install docker
+      ansible.builtin.apt:
+       name: docker.io
+       state: present
+
+    - name: add jenkins user to docker group
+      user:
+        name: "{{ item }}"
+        groups: docker
+        append: true
+      with_items:
+         - jenkins
+         - docker
+
+    - name: Update apt cache if repo was added.
+      apt:
+        update_cache: yes
